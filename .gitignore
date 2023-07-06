@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# ignore too large fitted objects
+fitted/lr_tuned.rds
+fitted/lr_tuned0.rds
+fitted/null_fit.rds
+fitted/tree_tuned.rds
