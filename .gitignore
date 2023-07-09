@@ -8,3 +8,6 @@ fitted/lr_tuned.rds
 fitted/lr_tuned0.rds
 fitted/null_fit.rds
 fitted/tree_tuned.rds
+
+# ignore data over 50MB
+data/original_covid.csv
