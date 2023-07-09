@@ -1,0 +1,293 @@
+---
+title: "Predicting Covid-19 Hospitalization Using Comorbidities"
+subtitle: "Data Science 2 Final Project"
+author: "Stuart Sumner"
+date: 03/13/2023
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    link-external-newwindow: true
+    echo: false
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+
+``` {r}
+
+set.seed(404)
+
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+library(lubridate)
+library(naniar)
+library(kknn)
+library(ranger)
+library(ggthemes)
+
+covid <- read_rds("data/tidied_covid.rds")
+
+# Set a seed
+set.seed(404)
+
+# Splitting data
+covid_split <- initial_split(covid, .8, strata = patient_type)
+covid_train <- training(covid_split)
+covid_test <- testing(covid_split)
+
+# Creating folds for V-fold cross-validation
+covid_folds <- vfold_cv(covid_train, v = 10, repeats = 3)
+
+# Recipe
+recipe <- recipe(patient_type ~ ., data = covid_train, strata = patient_type) %>% 
+  step_rm(pregnant, intubed, icu) %>% 
+  step_impute_mode(all_factor_predictors()) %>%
+  step_dummy(all_factor_predictors()) %>% 
+  step_scale(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  prep()
+```
+
+## Introduction
+
+My final project concerns Covid-19 comorbidities and using a suite of binary identifiers to determine the probability of a patient being sent home or hospitalized. This is an interesting question to me because, as we all know, Covid-19 had a major implication on our lives and the presence of comorbidites was always a topic of discussion for increasing its risk factor. In this dataset, provided by the Mexican government with over a dozen comorbidity indicators, I hope to compare a collection of models to predict the likelihood of hospitalization as optimally as possible.
+
+## The Data
+
+This dataset provides Covid-19 data for more than 1 million unique patients, with 21 variables, provided by the Mexican government. You can find more information as well as the codebook at the source on Kaggle.com, [here](https://www.kaggle.com/datasets/meirnizri/covid19-dataset?select=Covid+Data.csv).
+
+I plan to use logistic regression with and without *variable reduction* as well as a decision tree to predict whether they were returned home or hospitalized ('patient_type' in the data). Because this is a substantial dataset, I feel that I can budget and use cross-validation despite the lack of numeric variables or multi-level factors.
+
+
+### Outcome Variable
+
+My outcome variable, patient hospitalization, is also Boolean. Roughly 80% of patients in this dataset were not hospitalized, so a null model which predicts that every patient had the same outcome should have an 80% accuracy. Stratification by this outcome variable will ensure the resampling process is more representative.
+
+The following depicts the distribution of patient hospitalization by three common comorbidities: hypertension, pneumonia, and tobacco use.
+
+``` {r}
+
+a <- ggplot(covid, aes(patient_type)) +
+  geom_bar(aes(fill = hipertension))
+
+b <- ggplot(covid, aes(patient_type)) +
+  geom_bar(aes(fill = pneumonia))
+
+c <- ggplot(covid, aes(patient_type)) +
+  geom_bar(aes(fill = tobacco))
+
+
+
+a +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", family = "serif")
+  ) +
+  labs(title = "Hypertension")
+
+b +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", family = "serif")
+  ) +
+  labs(title = "Pneumonia")
+
+c +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", family = "serif")
+  ) +
+  labs(title = "Tobacco")
+
+ggplot(covid, aes(age)) +
+  geom_freqpoly(aes(color = patient_type)) +
+  theme_minimal()
+
+```
+
+We can see that lack of each comorbidity tends to outweigh its presence with different base rates across symptoms. One important note is the potential correlation between many variables; for example, hypertension and cardiovascular disease. This is a good opportunity to reduce the number of variables in a LASSO style regression.
+
+Because this is a classification issue, I will be assessing the strength of the following models with a measure of area under the ROC curve and and overall predictive accuracy on the testing test post-fitting.
+
+### Missingness
+
+This data has several issues of missingness. One variable, `date_died` has less than a 10% completion rate, for example. Given the context of this variable, I feel safe assuming these non-values indicate a patient lived, and thus convert these missing values to a simple indicator variable dead or alive (`died`). Other variables, however, are more ambiguous.
+
+Three variables, `pregnant`, `icu` and `intubed`, had more than 10% of their values missing with an unclear distinction between a non-value and lack or presence of comorbidity.  These variables were removed from the analysis.
+
+Many other variables had a small (less than 1%) but also ambiguous number of missing values — these values were imputed using the variable's mode. Though this is a potential bias in predictive strength for these variables, the values were slight enough, and the dataset large enough, that the model will still be successfully predictive. 
+
+## Methods
+
+For predicting the classification of hospitalization, I will be assessing the accuracy of the following models:
+
+1) a null model to establish a baseline;
+
+2) a logistic regression model with mixture 1, indicating insignificant variables will be dropped (Lasso Penalty);
+
+3) a logistic regression model with all variables retained;
+
+4) a decision tree model for classification.
+
+### Logistic Regression
+
+Logistic regression models are an analytical method to predict binary outcome variables-- well-suited for this analysis. This allows us to classify patient hospitalization status based on previous (or trained) observations.
+
+These models will be tuned by their `penalty()` argument (the amount of regularization underlying the model). For the simplicity of interpretation I have decided to specify a mixture of either 0 or 1 for these models, but future analyses could also optimize this argument in an elastic net model.
+
+### Decision Tree
+
+A decision tree model is a non-parametric, supervised model. Like other tree models, this model consists of root and decision nodes. At each node, this model will ask, for example, "is tobacco use present" and further inform its prediction. Decision trees can be used both for classification and regression.
+
+This model will be tuned by its learn rate (`learn_rate`), minimum node size (`min_n`), and proportion of randomly sampled predictors (`mtry`).
+
+### Recipe
+
+The recipe underlying each model will be the same, with the following steps:
+
+* stratify by output variable `patient_type`
+
+* remove high-missingness predictors
+
+* impute remaining missing values using variable mode
+
+* create dummy variables for all binary factors
+
+* scale all factors
+
+* remove any variables with singular values
+
+
+## Model Performance
+
+``` {r}
+
+null_results <- readRDS("results/null_results.rds")
+lr_results <- readRDS("results/lr_tuning_results.rds")
+lr_results0 <- readRDS("results/lr_tuning_results0.rds")
+tree_results <- readRDS("results/tree_tuning_results.rds")
+```
+
+#### Null
+``` {r}
+
+null_results
+```
+
+#### Logistic Regression (LASSO)
+``` {r}
+
+lr_results
+```
+
+#### Logistic Regression (Ridge)
+
+``` {r}
+
+lr_results0
+```
+
+#### Decision Tree
+
+``` {r}
+
+tree_results
+```
+
+
+We can see that our best-performing model is our decision tree model with minimum node size of 2 and tree depth of 4. This model, with these hyperparameters, exhibits an accuracy of 91.4% on our covid training set. Let's see how it performs on the test set.
+
+## Final Model Analysis
+
+``` {r}
+
+tree_tuned <- readRDS("fitted/tree_tuned.rds")
+
+tree_best <- select_best(tree_tuned)
+
+# Fitting our tuned models-----
+
+recipe <- recipe(patient_type ~ ., data = covid_train) %>% 
+  step_rm(pregnant, intubed, icu) %>% 
+  step_impute_mode(all_factor_predictors()) %>%
+  step_dummy(all_factor_predictors()) %>% 
+  step_scale(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  prep()
+
+tree_model <- decision_tree(
+  mode = "classification",
+  tree_depth = tune(),
+  min_n = tune()
+) %>% 
+  set_engine("rpart")
+
+tree_workflow <- workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(recipe)
+
+tree_workflow_tuned <- tree_workflow %>% 
+  finalize_workflow(tree_best)
+
+tree_fit <- fit(tree_workflow_tuned, covid_train)
+
+show_best(tree_tuned) %>% select(-.estimator)
+
+tree_pred <- predict(tree_fit, new_data = covid_test) %>% 
+  bind_cols(covid_test %>% select(patient_type))
+
+tree_results <- tree_pred %>% 
+  accuracy(truth = patient_type, estimate = .pred_class)
+
+tree_results
+```
+
+This decision tree model with minimum node size 2 and tree depth 4 performs well with our test data, with an accuracy of 91.4%. Note that this model performs similarly to the test data as the training, indicating that it does a good job preventing overfitting. This is likely in part due to the limited number of numeric variables-- though we still have a large number of degrees of freedom, the variance in those variables is exceedingly small because they are binary. Let's take a look at how well the model predicts hospitalizations versus how well it predicts being sent home.
+
+``` {r}
+
+# Confusion matrix
+
+library(cvms)
+library(rsvg)
+library(ggimage)
+
+matrix <- as_tibble(table(expected_value = tree_pred$.pred_class, reference_value = tree_pred$patient_type)) 
+
+plot_confusion_matrix(matrix, 
+                      target_col = "reference_value", 
+                      prediction_col = "expected_value",
+                      counts_col = "n")
+
+```
+
+It is clear from the resulting confusion matrix that this model exhibits a larger error rate for predicting hospitalizations. This is what might be expected-- recall that our base rate for hospitalizations is roughly 20%. However, future analyses would aim to improve on this error rate, where 31.9% of hospitalizations are incorrectly predicted as sent home.
+
+## Conclusions
+
+Every model tested performed better than the null model on the training data (with ~ 80% accuracy). Improvements on this model may have been made with Principal Component Analysis, but the number of Bernoulli variables again limits the capacity for significantly improved prediction rates. One could also optimally tune the mixture value in logistic regression, creating an elastic net model rather than ridge or Lasso. Future attempts to improve on this predictive accuracy rate could come through exploration of K-nearest neighbors and other unsupervised analyses. Further, the model could be improved by increasing the number of 1) V-folds and repetitions in our cross-validation or 2) levels in our hyperparameter grid, requiring a larger store of memory for processing but potentially offering a more predictive fit.
+
+This would also be a fascinating source from which to look at inferential research, examining which comorbidity or class of comorbidities has the greatest bearing on risk of hospitalization.
+
+
+## References
+
+Data Source: 
+
+Nizri, M. (2022, November). *COVID-19 Dataset*. Retrieved March 2023, from https://www.kaggle.com/datasets/meirnizri/covid19-dataset?select=Covid+Data.csv. 
+
+Penalty Tuning Methodology: 
+
+Vaughan, D., Hfitfeldt, E., Frick, H., Silge, J., Michael Mahoney, &amp; Kuhn, M. (2023). *Get started - A predictive modeling case study*. Kaggle.com. Retrieved March 2023, from https://www.tidymodels.org/start/case-study/#first-model 

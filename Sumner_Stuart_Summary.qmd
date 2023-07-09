@@ -1,0 +1,187 @@
+---
+title: "Covid-19 Comorbidity - Executive Summary"
+author: "Stuart Sumner"
+subtitle: "Data Science 2 Final Project"
+date: 03/13/2023
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    link-external-newwindow: true
+    echo: false
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+
+``` {r}
+
+set.seed(404)
+
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+library(lubridate)
+library(naniar)
+library(kknn)
+library(ranger)
+library(ggthemes)
+
+covid <- read_rds("data/tidied_covid.rds")
+
+# Set a seed
+set.seed(404)
+
+# Splitting data
+covid_split <- initial_split(covid, .8, strata = patient_type)
+covid_train <- training(covid_split)
+covid_test <- testing(covid_split)
+
+# Creating folds for V-fold cross-validation
+covid_folds <- vfold_cv(covid_train, v = 10, repeats = 3)
+
+# Recipe
+recipe <- recipe(patient_type ~ ., data = covid_train, strata = patient_type) %>% 
+  step_rm(pregnant, intubed, icu) %>% 
+  step_impute_mode(all_factor_predictors()) %>%
+  step_dummy(all_factor_predictors()) %>% 
+  step_scale(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  prep()
+```
+
+## Purpose
+
+My final project concerns Covid-19 comorbidities and using a suite of binary identifiers to determine the probability of a patient being sent home or hospitalized. This dataset contains information on over a dozen comorbidity indicators with more than 1 million observation. I hope to compare a collection of models to predict the likelihood of hospitalization as optimally as possible based on the presence/absence of comorbidities.
+
+## Method
+
+### Data
+
+This dataset can be found at its source on Kaggle.com, [here](https://www.kaggle.com/datasets/meirnizri/covid19-dataset?select=Covid+Data.csv). This data has 21 total variables, of which I will use 18 in my analysis. All but one of these variables are indicator variables, with "1" indicating the presence of the comorbidity.
+
+### Models
+
+I use logistic regression with and without variable removal as well as a decision tree to predict whether patients were returned home or hospitalized based on their comorbidities. I also compare the accuracy of these models both to each other and to a baseline/null model. Models are assessed simply on the proportion of hospitalizations/sent-homes they correctly predict.
+
+
+### Initial Results
+
+``` {r}
+
+null_results <- readRDS("results/null_results.rds")
+lr_results <- readRDS("results/lr_tuning_results.rds")
+lr_results0 <- readRDS("results/lr_tuning_results0.rds")
+tree_results <- readRDS("results/tree_tuning_results.rds")
+```
+
+#### Null
+``` {r}
+
+null_results %>% 
+  select(.metric, mean)
+```
+
+#### Logistic Regression (LASSO)
+``` {r}
+
+lr_results %>% 
+  select(penalty, .metric, mean)
+```
+
+#### Logistic Regression (Ridge)
+
+``` {r}
+
+lr_results0 %>% 
+  select(penalty, .metric, mean)
+```
+
+#### Decision Tree
+
+``` {r}
+
+tree_results %>% 
+  select(tree_depth, min_n, .metric, mean)
+```
+
+
+We can see that our best-performing model is our decision tree model with minimum node size of 2 and tree depth of 4. This model was tuned by its learn rate (`learn_rate`), minimum node size (`min_n`), and proportion of randomly sampled predictors (`mtry`). With these hyperparameters optimized, the model predicts with 91.4% accuracy on the training set. Next, we see how this model performs on the test set.
+
+## Final Results (Decision Tree Model)
+
+``` {r}
+
+tree_tuned <- readRDS("fitted/tree_tuned.rds")
+
+tree_best <- select_best(tree_tuned)
+
+# Fitting our tuned models-----
+
+recipe <- recipe(patient_type ~ ., data = covid_train) %>% 
+  step_rm(pregnant, intubed, icu) %>% 
+  step_impute_mode(all_factor_predictors()) %>%
+  step_dummy(all_factor_predictors()) %>% 
+  step_scale(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  prep()
+
+tree_model <- decision_tree(
+  mode = "classification",
+  tree_depth = tune(),
+  min_n = tune()
+) %>% 
+  set_engine("rpart")
+
+tree_workflow <- workflow() %>% 
+  add_model(tree_model) %>% 
+  add_recipe(recipe)
+
+tree_workflow_tuned <- tree_workflow %>% 
+  finalize_workflow(tree_best)
+
+tree_fit <- fit(tree_workflow_tuned, covid_train)
+
+tree_pred <- predict(tree_fit, new_data = covid_test) %>% 
+  bind_cols(covid_test %>% select(patient_type))
+
+tree_results <- tree_pred %>% 
+  accuracy(truth = patient_type, estimate = .pred_class)
+
+tree_results
+
+# Confusion matrix
+
+library(cvms)
+library(rsvg)
+library(ggimage)
+
+matrix <- as_tibble(table(expected_value = tree_pred$.pred_class, reference_value = tree_pred$patient_type)) 
+
+plot_confusion_matrix(matrix, 
+                      target_col = "reference_value", 
+                      prediction_col = "expected_value",
+                      counts_col = "n")
+
+```
+
+This decision tree model with minimum node size 2 and tree depth 4 performs well with our test data, with an accuracy of 91.4%. It is clear from the resulting confusion matrix that this model exhibits a larger error rate for predicting hospitalizations. Future analyses would aim to improve on this error rate, where 31.9% of hospitalizations are incorrectly predicted as sent home.
+
+## Conclusions
+
+Every model tested performed better than the null model on the training data (with ~ 80% accuracy). A Lasso logistic regression performed very similarly to our decision tree (91.4% accuracy) with an accuracy of 91.3% on the training set. Our decision tree won, however. Future attempts to improve on this predictive accuracy rate could come through exploration of K-nearest neighbors and other unsupervised analyses, as well as increasing the complexity of our cross-validation and model tuning.
+
+
+## References
+
+Data Source: 
+
+Nizri, M. (2022, November). *COVID-19 Dataset*. Retrieved March 2023, from https://www.kaggle.com/datasets/meirnizri/covid19-dataset?select=Covid+Data.csv. 
+
+Penalty Tuning Methodology: 
+
+Vaughan, D., Hfitfeldt, E., Frick, H., Silge, J., Michael Mahoney, &amp; Kuhn, M. (2023). *Get started - A predictive modeling case study*. Kaggle.com. Retrieved March 2023, from https://www.tidymodels.org/start/case-study/#first-model 

@@ -1,0 +1,122 @@
+---
+title: "Final Project Data Memo"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Stuart Sumner"
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+## The Data
+
+This dataset provides Covid-19 data for more than 1 million unique patients, with 21 variables, provided by the Mexican government. You can find more information as well as the codebook at the source on Kaggle.com, [here](https://www.kaggle.com/datasets/meirnizri/covid19-dataset?select=Covid+Data.csv).
+
+``` {r}
+#| code-fold: true
+
+library(tidyverse)
+library(lubridate)
+library(naniar)
+library(cowplot)
+
+covid <- read_csv("data/Covid Data.csv") %>% 
+  janitor::clean_names() %>% 
+  replace_with_na(replace = list(date_died = "9999-99-99", intubed = 99)) %>% 
+  mutate(
+    age = age,
+    usmer = factor(usmer, levels = c(1, 2)),
+    sex = factor(sex, levels = c(1, 2), labels = c("F", "M")),
+    patient_type = factor(patient_type, levels = c(1, 2), labels = c("home", "hospitalized")),
+    date_died = dmy(date_died),
+    intubed = factor(intubed, levels = c(1, 97), labels = c("Yes", "No")),
+    pneumonia = factor(pneumonia, levels = c(1, 2), labels = c("Yes", "No")),
+    pregnant = factor(pregnant, levels = c(1, 2), labels = c("Yes", "No")),
+    diabetes = factor(diabetes, levels = c(1, 2), labels = c("Yes", "No")),
+    copd = factor(copd, levels = c(1, 2), labels = c("Yes", "No")),
+    asthma = factor(asthma, levels = c(1, 2), labels = c("Yes", "No")),
+    inmsupr = factor(inmsupr, levels = c(1, 2), labels = c("Yes", "No")),
+    hipertension = factor(hipertension, levels = c(1, 2), labels = c("Yes", "No")),
+    other_disease = factor(other_disease, levels = c(1, 2), labels = c("Yes", "No")),
+    cardiovascular = factor(cardiovascular, levels = c(1, 2), labels = c("Yes", "No")),
+    obesity = factor(obesity, levels = c(1, 2), labels = c("Yes", "No")),
+    renal_chronic = factor(renal_chronic, levels = c(1, 2), labels = c("Yes", "No")),
+    tobacco = factor(tobacco, levels = c(1, 2), labels = c("Yes", "No")),
+    clasiffication_final = factor(clasiffication_final, levels = c(1, 2, 3, 4, 5, 6, 7)),
+    clasiffication_final = fct_collapse(clasiffication_final,
+                                       `1` = "1",
+                                       `2` = "2",
+                                       `3` = "3",
+                                       None = c("4", "5", "6", "7")),
+    icu = factor(icu, levels = c(1, 2), labels = c("Yes", "No"))
+  ) %>% 
+  select(-medical_unit, -usmer)
+
+skimr::skim(covid)
+```
+
+
+This dataset requires a little bit of help as all columns are auto-coded in as numeric when most should be in factor form. This dataset contains 18 factors, 2 numeric, and 1 date variable-- this is a very Boolean dataset, which would be concerning if it were smaller, and may limit the ways we can interpret most variable coefficients. Outside of that, the read-in process is fairly smooth (although the data misspells classification; quick fix).
+
+I've performed a quick skim of the processed data. Note the amount of missingness in some of these columns, especially 'pregnant', 'icu', and 'date_died'. This is going to be a big question in how to move forward with the analysis and may require some assumptions on my part. A further exploration will show that there are a little over 8,000 pregnant patients and over 500,000 non-pregnant patients. Because these numbers don't seem too unrealistic to me, I will treat those NA's as true NA's, unmeasured values. The same can be said for icu. Because both these measures are so under-completed, I plan to drop them from my analysis rather than try to impute values. For 'date_died', however, I will recode NA's as meaning the patient survived, which I think is a safe assumption. For all other variables, I plan to impute the missing values as their completion rate is much higher and, again, this dataset is large.
+
+## Analysis
+
+I don't foresee any other major issues there, so I can think about splitting my data and start formulating a recipe. I plan to split my data with 80% training 20% testing as this is a large dataset, stratifying by my outcome variable ('patient_type'). The outcome variable depicts whether the patient was sent home or hospitalized. I am stratifying by this variable to ensure that both sent home and hospitalized patients are proportionally represented in each level of my analysis. I plan to use logistic regression and, rather than predict a binary, predict the probability that the patient was hospitalized based on predictor variables. See below for visuals regarding the outcome variable.
+
+```{r}
+#| code-fold: true
+
+a <- ggplot(covid, aes(patient_type)) +
+  geom_bar(aes(fill = hipertension))
+
+b <- ggplot(covid, aes(patient_type)) +
+  geom_bar(aes(fill = pneumonia))
+
+c <- ggplot(covid, aes(patient_type)) +
+  geom_bar(aes(fill = tobacco))
+
+
+
+a +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold")
+  ) +
+  labs(title = "Hypertension")
+
+b +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold")
+  ) +
+  labs(title = "Pneumonia")
+
+c +
+  theme_minimal() +
+  theme(
+    axis.title = element_blank(),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold")
+  ) +
+  labs(title = "Tobacco")
+
+ggplot(covid, aes(age)) +
+  geom_freqpoly(aes(color = patient_type)) +
+  theme_minimal()
+
+```
+
+I would also like to use resampling to strengthen my models. This is a large dataset, so using too many repeats or folds may create a large time constraint-- for this reason, I'm not yet sure what values I want to use for both. I feel confident moving forward that I can create an appropriate recipe and workflow for multiple models soon. 

@@ -1,0 +1,43 @@
+---
+title: "Final Project Data Memo"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Stuart Sumner"
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+## Downloading Packages
+
+``` {r}
+#| code-fold: true
+
+library(tidyverse)
+
+covid <- read_csv("data/Covid Data.csv") %>% 
+  janitor::clean_names()
+```
+
+``` {r}
+
+head(covid)
+```
+
+After trying to reconfigure my thesis question and data to a predictive, rather than an inferential, question, I have decided to look for an entirely separate dataset with sufficient observations and predictors. My apologies for getting this updated memo to you so late.
+
+This dataset provides Covid-19 data for more than 1 million unique patients, with 21 variables, provided by the Mexican government. You can find more information as well as the codebook at the source on Kaggle.com, [here](https://www.kaggle.com/datasets/meirnizri/covid19-dataset?select=Covid+Data.csv). This is an inherently interesting dataset to me simply because we lived through this pandemic and, though we got a lot of secondhand information regarding comorbidities, for example, it will be interesting to explore a large Covid-19 dataset myself with many predictors at hand.
+
+My plan for the analysis is to use logistic regression to assess the type of care a person received: whether they were returned home or hospitalized ('patient_type' in the data). This is a classification problem. Because this is a substantial dataset, I feel that I can budget, resample, and assess my data without loss due to low-N issues. However, one complication with this dataset is that nearly all predictors are Boolean variables and need to be made meaningful factors so our analysis makes sense. Including numerical predictors may have made the model fitting more robust. Additionally, one variable (date_died) will need to be convert to a date variable.
+
+Regarding missingness, there are many values that appear to be missing, indicated by values of '99' or '97'. For example, looking at the number of pregnant cases will be difficult as nearly half of all 1 million+ patients report a missing value for this variable. There are also many missing values for intubed and date_died, which creates an interpretation problem-- it may be safe to say that missing values for 'date_died' indicate the patient lived (not everyone with Covid-19 died, after all). It also may be safe to assume that NA's in 'pregnant' indicate not pregnant. But the degree to which that's a safe assumption is a question mark and may be a flaw in the analysis, depending on how I choose to treat these missing values.
+
+It is helpful to me that this dataset is largely tidied already, as I want to start my analysis almost immediately. This means my EDA will need to be more fleshed out.
